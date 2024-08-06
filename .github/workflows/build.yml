@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag'
+        description: '版本标签'
         required: true
 
 jobs:
@@ -12,15 +12,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Build
+    
+    - name: 设置Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        
+    - name: 构建
       run: cargo build --release
-    - name: Get binary name
+      
+    - name: 获取二进制文件名
       id: get_binary
       run: |
         BINARY_NAME=$(ls target/release | grep -v '\.d$' | grep -v '\.rlib$' | head -n 1)
         echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_OUTPUT
-        echo "Binary name is: $BINARY_NAME"
-    - name: Release
+        echo "二进制文件名是: $BINARY_NAME"
+        
+    - name: 创建Release并上传二进制文件
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
