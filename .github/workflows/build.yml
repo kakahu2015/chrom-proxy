@@ -1,6 +1,10 @@
-name: Manual Release
+name: Rust Build
 
 on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       version:
@@ -8,48 +12,61 @@ on:
         required: true
         default: '0.1.0'
 
-permissions:
-  contents: write
-
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
 
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          
-      - name: Build
-        run: cargo build --release
-        
-      - name: Get binary name
-        id: get_binary
-        run: |
-          BINARY_NAME=$(ls target/release | grep -v '\.d$' | grep -v '\.rlib$' | head -n 1)
-          echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_OUTPUT
-          echo "Binary name is: $BINARY_NAME"
-        
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ github.event.inputs.version }}
-          release_name: Release ${{ github.event.inputs.version }}
-          draft: false
-          prerelease: false
-        
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./target/release/${{ steps.get_binary.outputs.BINARY_NAME }}
-          asset_name: ${{ steps.get_binary.outputs.BINARY_NAME }}-${{ github.event.inputs.version }}
-          asset_content_type: application/octet-stream
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Setup Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+
+    - name: Build
+      run: cargo build --release
+
+    - name: Verify binary
+      run: |
+        if [ ! -f target/release/chrom-proxy ]; then
+          echo "Error: Binary not found. Build may have failed."
+          exit 1
+        fi
+        echo "Binary successfully built: $(ls -l target/release/chrom-proxy)"
+
+    - name: Get binary name
+      id: get_binary
+      run: |
+        BINARY_NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].targets[] | select(.kind[] | contains("bin")) | .name')
+        echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_OUTPUT
+        echo "Binary name is: $BINARY_NAME"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: ${{ steps.get_binary.outputs.BINARY_NAME }}
+        path: target/release/${{ steps.get_binary.outputs.BINARY_NAME }}
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ github.event.inputs.version }}
+        release_name: Release ${{ github.event.inputs.version }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./target/release/${{ steps.get_binary.outputs.BINARY_NAME }}
+        asset_name: ${{ steps.get_binary.outputs.BINARY_NAME }}-${{ github.event.inputs.version }}
+        asset_content_type: application/octet-stream
