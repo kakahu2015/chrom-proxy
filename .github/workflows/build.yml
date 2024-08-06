@@ -1,0 +1,79 @@
+name: Manual Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: '发布版本号'
+        required: true
+        default: '1.0.0'
+      is_prerelease:
+        description: '是否为预发布版本'
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  compile-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v3
+
+    - name: 设置 Rust 环境
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+
+    - name: 缓存依赖
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: 编译项目
+      run: cargo build --release --verbose
+
+    - name: 运行测试
+      run: cargo test --release --verbose
+
+    - name: 创建 Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ github.event.inputs.release_version }}
+        release_name: Release ${{ github.event.inputs.release_version }}
+        draft: false
+        prerelease: ${{ github.event.inputs.is_prerelease }}
+
+    - name: 获取可执行文件名称
+      id: get_artifact_name
+      run: echo "ARTIFACT_NAME=$(ls target/release | grep -v '\.d$')" >> $GITHUB_OUTPUT
+
+    - name: 上传 Release 资产
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./target/release/${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }}
+        asset_name: ${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }}-${{ github.event.inputs.release_version }}
+        asset_content_type: application/octet-stream
+
+    - name: 生成并上传 SHA256 校验和
+      run: |
+        cd target/release
+        sha256sum ${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }} > SHA256SUMS.txt
+        gh release upload v${{ github.event.inputs.release_version }} SHA256SUMS.txt
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
