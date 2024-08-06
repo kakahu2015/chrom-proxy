@@ -7,8 +7,9 @@ use tokio_rustls::TlsAcceptor;
 use std::fs::File;
 use std::io::BufReader;
 use std::collections::HashMap;
-use base64::{Engine as _, engine::general_purpose};
+use base64::{Engine as _, engine::general_purpose, engine::GeneralPurpose};
 use reqwest;
+use tokio::io::AsyncBufReadExt;
 
 const PROXY_AUTH_HEADER: &str = "Proxy-Authorization";
 const EXPECTED_USERNAME: &str = "user";
@@ -33,22 +34,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (stream, _) = listener.accept()?;
         let acceptor = acceptor.clone();
 
-        tokio::spawn(async move {
-            if let Ok(stream) = acceptor.accept(stream).await {
-                if let Err(e) = handle_client(stream).await {
-                    eprintln!("处理客户端时出错: {}", e);
-                }
-            }
-        });
+      tokio::spawn(async move {
+      if let Ok(stream) = acceptor.accept(stream).await {
+          if let Err(e) = handle_client(stream).await {
+              eprintln!("处理客户端时出错: {}", e);
+          }
+        }
+    });
+        
     }
 }
 
-async fn handle_client(stream: tokio_rustls::server::TlsStream<TcpStream>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut buf_stream = BufStream::new(stream);
+async fn handle_client(mut stream: tokio_rustls::server::TlsStream<TcpStream>) -> Result<(), Box<dyn std::error::Error>> {
+    let (reader, writer) = tokio::io::split(stream);
+    let mut buf_reader = tokio::io::BufReader::new(reader);
     
     let mut request_line = String::new();
-    buf_stream.read_line(&mut request_line).await?;
-    let (method, target, version) = parse_request_line(&request_line)?;
+    buf_reader.read_line(&mut request_line).await?;
 
     let mut headers = HashMap::new();
     loop {
