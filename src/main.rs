@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-async fn handle_client(mut stream: tokio_rustls::server::TlsStream<TcpStream>) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_client(stream: tokio_rustls::server::TlsStream<TcpStream>) -> Result<(), Box<dyn std::error::Error>> {
     let (reader, mut writer) = tokio::io::split(stream);
     let mut buf_reader = BufReader::new(reader);
     
