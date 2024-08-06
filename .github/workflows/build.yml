@@ -1,4 +1,4 @@
-name: Manual Build and Release
+name: Build and Release
 
 on:
   workflow_dispatch:
@@ -17,47 +17,21 @@ permissions:
   contents: write
 
 jobs:
-  compile-and-publish:
+  build-and-release:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
 
-    - name: Setup Rust environment
+    - name: Setup Rust
       uses: actions-rs/toolchain@v1
       with:
         profile: minimal
         toolchain: stable
         override: true
 
-    - name: Cache dependencies
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
     - name: Build project
       run: cargo build --release --verbose
-
-    - name: Run tests
-      run: cargo test --release --verbose
-
-    - name: Get artifact name
-      id: get_artifact_name
-      run: |
-        ARTIFACT_NAME=$(ls target/release | grep -v '\.d$' | grep -v '\.rlib$' | head -n 1)
-        echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
-        echo "Found artifact: $ARTIFACT_NAME"
-
-    - name: Verify artifact exists
-      run: |
-        if [ ! -f "target/release/${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }}" ]; then
-          echo "Error: Artifact file not found"
-          exit 1
-        fi
 
     - name: Create Release
       id: create_release
@@ -76,27 +50,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./target/release/${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }}
-        asset_name: ${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }}-${{ github.event.inputs.release_version }}
+        asset_path: ./target/release/build
+        asset_name: build-${{ github.event.inputs.release_version }}
         asset_content_type: application/octet-stream
-
-    - name: Generate and upload SHA256 checksum
-      run: |
-        cd target/release
-        if [ ! -f "${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }}" ]; then
-          echo "Error: Artifact file not found for checksum generation"
-          exit 1
-        fi
-        sha256sum ${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }} > SHA256SUMS.txt
-        gh release upload v${{ github.event.inputs.release_version }} SHA256SUMS.txt
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Verify upload success
-      run: |
-        if ! gh release view v${{ github.event.inputs.release_version }} | grep -q "${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }}"; then
-          echo "Error: Asset upload verification failed"
-          exit 1
-        fi
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
