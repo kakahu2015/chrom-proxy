@@ -192,8 +192,26 @@ fn load_certs(filename: &str) -> std::io::Result<Vec<Certificate>> {
 }
 
 fn load_private_key(filename: &str) -> std::io::Result<PrivateKey> {
-    let mut reader = StdBufReader::new(File::open(filename)?);
-    pkcs8_private_keys(&mut reader)
-        .map(|mut keys| PrivateKey(keys.remove(0)))
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid key"))
+    let keyfile = File::open(filename)?;
+    let mut reader = StdBufReader::new(keyfile);
+    
+    // 首先尝试原来的方法
+    if let Ok(mut keys) = pkcs8_private_keys(&mut reader) {
+        if !keys.is_empty() {
+            return Ok(PrivateKey(keys.remove(0)));
+        }
+    }
+    
+    // 如果失败,尝试读取为 PEM 编码的 EC 密钥
+    reader.seek(std::io::SeekFrom::Start(0))?;
+    if let Ok(mut keys) = ec_private_keys(&mut reader) {
+        if !keys.is_empty() {
+            return Ok(PrivateKey(keys.remove(0)));
+        }
+    }
+    
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "No supported private key found in the file",
+    ))
 }
