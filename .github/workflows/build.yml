@@ -1,4 +1,4 @@
-name: Release
+name: Build and Release
 
 on:
   workflow_dispatch:
@@ -14,6 +14,12 @@ jobs:
     - uses: actions/checkout@v3
     - name: Build
       run: cargo build --release
+    - name: Get binary name
+      id: get_binary
+      run: |
+        BINARY_NAME=$(ls target/release | grep -v '\.d$' | grep -v '\.rlib$' | head -n 1)
+        echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_OUTPUT
+        echo "Binary name is: $BINARY_NAME"
     - name: Release
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -21,4 +27,4 @@ jobs:
         gh release create ${{ github.event.inputs.version }} \
           --title "${{ github.event.inputs.version }}" \
           --notes "Release ${{ github.event.inputs.version }}" \
-          ./target/release/YOUR_BINARY_NAME
+          ./target/release/${{ steps.get_binary.outputs.BINARY_NAME }}
