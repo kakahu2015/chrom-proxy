@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       release_version:
-        description: 'Release version'
+        description: '发布版本号'
         required: true
         default: '1.0.0'
       is_prerelease:
-        description: 'Is this a pre-release?'
+        description: '是否为预发布版本'
         type: boolean
         required: true
         default: false
@@ -20,23 +20,39 @@ jobs:
   compile-and-publish:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
+    - name: 检出代码
       uses: actions/checkout@v3
 
-    - name: Setup Rust environment
+    - name: 设置 Rust 环境
       uses: actions-rs/toolchain@v1
       with:
         profile: minimal
         toolchain: stable
         override: true
 
-    - name: Build project
+    - name: 缓存依赖
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: 编译项目
       run: cargo build --release --verbose
 
-    - name: Run tests
+    - name: 运行测试
       run: cargo test --release --verbose
 
-    - name: Create Release
+    - name: 安装 GitHub CLI
+      run: |
+        sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-key C99B11DEB97541F0
+        sudo apt-add-repository https://cli.github.com/packages
+        sudo apt update
+        sudo apt install gh
+
+    - name: 创建 Release
       id: create_release
       uses: actions/create-release@v1
       env:
@@ -47,11 +63,17 @@ jobs:
         draft: false
         prerelease: ${{ github.event.inputs.is_prerelease }}
 
-    - name: Get artifact name
-      id: get_artifact_name
-      run: echo "ARTIFACT_NAME=$(ls target/release | grep -v '\.d$' | head -n 1)" >> $GITHUB_OUTPUT
+    - name: 打印 Release URL
+      run: echo "Release URL: ${{ steps.create_release.outputs.upload_url }}"
 
-    - name: Upload Release Asset
+    - name: 获取可执行文件名称
+      id: get_artifact_name
+      run: |
+        ARTIFACT_NAME=$(ls target/release | grep -v '\.d$')
+        echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+        echo "Artifact name: $ARTIFACT_NAME"
+
+    - name: 上传 Release 资产
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -61,10 +83,24 @@ jobs:
         asset_name: ${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }}-${{ github.event.inputs.release_version }}
         asset_content_type: application/octet-stream
 
-    - name: Generate and upload SHA256 checksum
+    - name: 生成并上传 SHA256 校验和
       run: |
         cd target/release
         sha256sum ${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }} > SHA256SUMS.txt
-        gh release upload v${{ github.event.inputs.release_version }} SHA256SUMS.txt
+        echo "SHA256 checksum:"
+        cat SHA256SUMS.txt
+        echo "Uploading SHA256SUMS.txt to release..."
+        gh release upload v${{ github.event.inputs.release_version }} SHA256SUMS.txt --clobber
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 验证发布
+      run: |
+        echo "验证发布资产..."
+        gh release view v${{ github.event.inputs.release_version }}
+        echo "验证完成。"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 发布完成通知
+      run: echo "Release v${{ github.event.inputs.release_version }} 已成功发布！"
