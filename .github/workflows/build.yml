@@ -1,50 +1,55 @@
-name: Build and Release
+name: Manual Release
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本标签'
+        description: 'Release version'
         required: true
+        default: '0.1.0'
+
+permissions:
+  contents: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: 设置Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          
+      - name: Build
+        run: cargo build --release
         
-    - name: 构建
-      run: cargo build --release
-      
-    - name: 获取二进制文件名
-      id: get_binary
-      run: |
-        BINARY_NAME=$(ls target/release | grep -v '\.d$' | grep -v '\.rlib$' | head -n 1)
-        echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_OUTPUT
-        echo "二进制文件名是: $BINARY_NAME"
+      - name: Get binary name
+        id: get_binary
+        run: |
+          BINARY_NAME=$(ls target/release | grep -v '\.d$' | grep -v '\.rlib$' | head -n 1)
+          echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_OUTPUT
+          echo "Binary name is: $BINARY_NAME"
         
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: v${{ github.event.inputs.version }}
-        release_name: Release ${{ github.event.inputs.version }}
-        draft: false
-        prerelease: false
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          release_name: Release ${{ github.event.inputs.version }}
+          draft: false
+          prerelease: false
         
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./target/release/${{ steps.get_binary.outputs.BINARY_NAME }}
-        asset_name: ${{ steps.get_binary.outputs.BINARY_NAME }}
-        asset_content_type: application/octet-stream
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./target/release/${{ steps.get_binary.outputs.BINARY_NAME }}
+          asset_name: ${{ steps.get_binary.outputs.BINARY_NAME }}
+          asset_content_type: application/octet-stream
