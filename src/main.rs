@@ -4,22 +4,20 @@ use tokio::net::{TcpListener, TcpStream};
 use rustls::{Certificate, PrivateKey, ServerConfig};
 use tokio_rustls::TlsAcceptor;
 use std::fs::File;
-use std::io::{BufReader as StdBufReader, Seek};  // 添加 Seek
+use std::io::{BufReader as StdBufReader};
 use std::collections::HashMap;
-use base64::{Engine as _, engine::general_purpose};  // 修正 typo
 use reqwest;
-use rustls_pemfile::{pkcs8_private_keys, ec_private_keys};
+use rustls_pemfile::{certs, pkcs8_private_keys};
+use url::Url;
 
-const PROXY_AUTH_HEADER: &str = "Proxy-Authorization";
 const EXPECTED_USERNAME: &str = "user";
 const EXPECTED_PASSWORD: &str = "password";
 const FAKE_SITE: &str = "https://www.google.com";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cert = load_certs("/app/ssl.crt").map_err(|e| format!("Failed to load certificate: {}", e))?;
-    let key = load_private_key("/app/ssl.key").map_err(|e| format!("Failed to load private key: {}", e))?;
-
+    let cert = load_certs("/app/ssl.crt")?;
+    let key = load_private_key("/app/ssl.key")?;
 
     let config = ServerConfig::builder()
         .with_safe_defaults()
@@ -65,7 +63,7 @@ async fn handle_client(mut stream: tokio_rustls::server::TlsStream<TcpStream>) -
         }
     }
 
-    if !authenticate(&headers) {
+    if !authenticate_from_url(target) {
         return send_fake_response(&mut writer).await;
     }
 
@@ -78,6 +76,15 @@ async fn handle_client(mut stream: tokio_rustls::server::TlsStream<TcpStream>) -
     Ok(())
 }
 
+fn authenticate_from_url(target: &str) -> bool {
+    if let Ok(url) = Url::parse(target) {
+        if let Some(auth) = url.password() {
+            return url.username() == EXPECTED_USERNAME && auth == EXPECTED_PASSWORD;
+        }
+    }
+    false
+}
+
 async fn send_fake_response(writer: &mut tokio::io::WriteHalf<tokio_rustls::server::TlsStream<TcpStream>>) -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     let fake_response = client.get(FAKE_SITE).send().await?;
@@ -85,17 +92,12 @@ async fn send_fake_response(writer: &mut tokio::io::WriteHalf<tokio_rustls::serv
     let headers = fake_response.headers().clone();
     let body = fake_response.bytes().await?;
 
-    let mut response = format!(
-        "HTTP/1.1 {}\r\n",
-        status
-    );
-
+    let mut response = format!("HTTP/1.1 {}\r\n", status);
     for (name, value) in headers.iter() {
         if name != "transfer-encoding" {
             response.push_str(&format!("{}: {}\r\n", name, value.to_str().unwrap_or("")));
         }
     }
-
     response.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
     
     writer.write_all(response.as_bytes()).await?;
@@ -182,50 +184,16 @@ fn parse_header(line: &str) -> Option<(String, String)> {
     }
 }
 
-fn authenticate(headers: &HashMap<String, String>) -> bool {
-    if let Some(auth) = headers.get(PROXY_AUTH_HEADER) {
-        if auth.starts_with("Basic ") {
-            if let Ok(decoded) = general_purpose::STANDARD.decode(&auth[6..]) {
-                if let Ok(auth_str) = String::from_utf8(decoded) {
-                    let parts: Vec<&str> = auth_str.splitn(2, ':').collect();
-                    if parts.len() == 2 {
-                        return parts[0] == EXPECTED_USERNAME && parts[1] == EXPECTED_PASSWORD;
-                    }
-                }
-            }
-        }
-    }
-    false
-}
-
 fn load_certs(filename: &str) -> std::io::Result<Vec<Certificate>> {
-    let certfile = File::open(filename)?;
-    let mut reader = StdBufReader::new(certfile);
-    let certs = rustls_pemfile::certs(&mut reader)?;
-    Ok(certs.into_iter().map(Certificate).collect())
+    let mut reader = StdBufReader::new(File::open(filename)?);
+    certs(&mut reader)
+        .map(|certs| certs.into_iter().map(Certificate).collect())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid cert"))
 }
 
 fn load_private_key(filename: &str) -> std::io::Result<PrivateKey> {
-    let keyfile = File::open(filename)?;
-    let mut reader = StdBufReader::new(keyfile);
-    
-    // 首先尝试读取为 PEM 编码的 EC 密钥
-    if let Ok(mut keys) = ec_private_keys(&mut reader) {
-        if !keys.is_empty() {
-            return Ok(PrivateKey(keys.remove(0)));
-        }
-    }
-    
-    // 如果失败，尝试读取为 PKCS#8 编码的密钥
-    reader.seek(std::io::SeekFrom::Start(0))?;
-    if let Ok(mut keys) = pkcs8_private_keys(&mut reader) {
-        if !keys.is_empty() {
-            return Ok(PrivateKey(keys.remove(0)));
-        }
-    }
-    
-    Err(std::io::Error::new(
-        std::io::ErrorKind::InvalidData,
-        "No supported private key found in the file",
-    ))
+    let mut reader = StdBufReader::new(File::open(filename)?);
+    pkcs8_private_keys(&mut reader)
+        .map(|mut keys| PrivateKey(keys.remove(0)))
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid key"))
 }
