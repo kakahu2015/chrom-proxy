@@ -1,15 +1,13 @@
-use std::net::TcpListener;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufStream};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig};
 use tokio_rustls::TlsAcceptor;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::BufReader as StdBufReader;
 use std::collections::HashMap;
-use base64::{Engine as _, engine::general_purpose, engine::GeneralPurpose};
+use base64::{Engine as _, engine::general_purpose};
 use reqwest;
-use tokio::io::AsyncBufReadExt;
 
 const PROXY_AUTH_HEADER: &str = "Proxy-Authorization";
 const EXPECTED_USERNAME: &str = "user";
@@ -27,35 +25,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_single_cert(cert, key)?;
     let acceptor = TlsAcceptor::from(Arc::new(config));
 
-    let listener = TcpListener::bind("127.0.0.1:8443")?;
-    println!("HTTPS 代理服务器正在监听 127.0.0.1:8443");
+    let listener = TcpListener::bind("127.0.0.1:8443").await?;
+    println!("HTTPS proxy server listening on 127.0.0.1:8443");
 
     loop {
-        let (stream, _) = listener.accept()?;
+        let (stream, _) = listener.accept().await?;
         let acceptor = acceptor.clone();
 
-      tokio::spawn(async move {
-      if let Ok(stream) = acceptor.accept(stream).await {
-          if let Err(e) = handle_client(stream).await {
-              eprintln!("处理客户端时出错: {}", e);
-          }
-        }
-    });
-        
+        tokio::spawn(async move {
+            if let Ok(stream) = acceptor.accept(stream).await {
+                if let Err(e) = handle_client(stream).await {
+                    eprintln!("Error handling client: {}", e);
+                }
+            }
+        });
     }
 }
 
 async fn handle_client(mut stream: tokio_rustls::server::TlsStream<TcpStream>) -> Result<(), Box<dyn std::error::Error>> {
-    let (reader, writer) = tokio::io::split(stream);
-    let mut buf_reader = tokio::io::BufReader::new(reader);
+    let (reader, mut writer) = tokio::io::split(stream);
+    let mut buf_reader = BufReader::new(reader);
     
     let mut request_line = String::new();
     buf_reader.read_line(&mut request_line).await?;
 
+    let (method, target, version) = parse_request_line(&request_line)?;
+
     let mut headers = HashMap::new();
     loop {
         let mut line = String::new();
-        let bytes_read = buf_stream.read_line(&mut line).await?;
+        let bytes_read = buf_reader.read_line(&mut line).await?;
         if bytes_read == 0 || line == "\r\n" {
             break;
         }
@@ -65,19 +64,19 @@ async fn handle_client(mut stream: tokio_rustls::server::TlsStream<TcpStream>) -
     }
 
     if !authenticate(&headers) {
-        return send_fake_response(&mut buf_stream).await;
+        return send_fake_response(&mut writer).await;
     }
 
     if method == "CONNECT" {
-        handle_connect(target, &mut buf_stream).await?;
+        handle_connect(target, &mut buf_reader, &mut writer).await?;
     } else {
-        handle_regular_request(method, target, version, headers, &mut buf_stream).await?;
+        handle_regular_request(method, target, version, headers, &mut buf_reader, &mut writer).await?;
     }
 
     Ok(())
 }
 
-async fn send_fake_response(buf_stream: &mut BufStream<tokio_rustls::server::TlsStream<TcpStream>>) -> Result<(), Box<dyn std::error::Error>> {
+async fn send_fake_response(writer: &mut tokio::io::WriteHalf<tokio_rustls::server::TlsStream<TcpStream>>) -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     let fake_response = client.get(FAKE_SITE).send().await?;
     let status = fake_response.status();
@@ -90,30 +89,33 @@ async fn send_fake_response(buf_stream: &mut BufStream<tokio_rustls::server::Tls
     );
 
     for (name, value) in headers.iter() {
-        if name != "transfer-encoding" {  // 我们会自己处理 content-length
+        if name != "transfer-encoding" {
             response.push_str(&format!("{}: {}\r\n", name, value.to_str().unwrap_or("")));
         }
     }
 
     response.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
     
-    buf_stream.write_all(response.as_bytes()).await?;
-    buf_stream.write_all(&body).await?;
-    buf_stream.flush().await?;
+    writer.write_all(response.as_bytes()).await?;
+    writer.write_all(&body).await?;
+    writer.flush().await?;
 
     Ok(())
 }
 
-async fn handle_connect(target: &str, buf_stream: &mut BufStream<tokio_rustls::server::TlsStream<TcpStream>>) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_connect(
+    target: &str,
+    reader: &mut BufReader<tokio::io::ReadHalf<tokio_rustls::server::TlsStream<TcpStream>>>,
+    writer: &mut tokio::io::WriteHalf<tokio_rustls::server::TlsStream<TcpStream>>
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut target_stream = TcpStream::connect(target).await?;
-    buf_stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;
-    buf_stream.flush().await?;
+    writer.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;
+    writer.flush().await?;
 
-    let (mut reader, mut writer) = buf_stream.get_mut().split();
-    let (mut target_reader, mut target_writer) = tokio::io::split(target_stream);
+    let (mut target_reader, mut target_writer) = target_stream.split();
 
-    let client_to_target = tokio::io::copy(&mut reader, &mut target_writer);
-    let target_to_client = tokio::io::copy(&mut target_reader, &mut writer);
+    let client_to_target = tokio::io::copy(reader, &mut target_writer);
+    let target_to_client = tokio::io::copy(&mut target_reader, writer);
 
     tokio::select! {
         _ = client_to_target => {},
@@ -128,15 +130,18 @@ async fn handle_regular_request(
     target: &str, 
     version: &str, 
     headers: HashMap<String, String>, 
-    buf_stream: &mut BufStream<tokio_rustls::server::TlsStream<TcpStream>>
+    reader: &mut BufReader<tokio::io::ReadHalf<tokio_rustls::server::TlsStream<TcpStream>>>,
+    writer: &mut tokio::io::WriteHalf<tokio_rustls::server::TlsStream<TcpStream>>
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut target_stream = TcpStream::connect(target).await?;
     
-    target_stream.write_all(format!("{} {} {}\r\n", method, target, version).as_bytes()).await?;
+    let mut request = format!("{} {} {}\r\n", method, target, version);
     for (key, value) in &headers {
-        target_stream.write_all(format!("{}: {}\r\n", key, value).as_bytes()).await?;
+        request.push_str(&format!("{}: {}\r\n", key, value));
     }
-    target_stream.write_all(b"\r\n").await?;
+    request.push_str("\r\n");
+
+    target_stream.write_all(request.as_bytes()).await?;
 
     if let Some(content_length) = headers.get("Content-Length") {
         let content_length: usize = content_length.parse()?;
@@ -144,7 +149,7 @@ async fn handle_regular_request(
         let mut buffer = [0; 8192];
         while remaining > 0 {
             let to_read = remaining.min(buffer.len());
-            let bytes_read = buf_stream.read(&mut buffer[..to_read]).await?;
+            let bytes_read = reader.read(&mut buffer[..to_read]).await?;
             if bytes_read == 0 {
                 break;
             }
@@ -153,7 +158,7 @@ async fn handle_regular_request(
         }
     }
 
-    tokio::io::copy(&mut target_stream, buf_stream).await?;
+    tokio::io::copy(&mut target_stream, writer).await?;
 
     Ok(())
 }
@@ -193,14 +198,14 @@ fn authenticate(headers: &HashMap<String, String>) -> bool {
 
 fn load_certs(filename: &str) -> std::io::Result<Vec<Certificate>> {
     let certfile = File::open(filename)?;
-    let mut reader = BufReader::new(certfile);
+    let mut reader = StdBufReader::new(certfile);
     let certs = rustls_pemfile::certs(&mut reader)?;
     Ok(certs.into_iter().map(Certificate).collect())
 }
 
 fn load_private_key(filename: &str) -> std::io::Result<PrivateKey> {
     let keyfile = File::open(filename)?;
-    let mut reader = BufReader::new(keyfile);
+    let mut reader = StdBufReader::new(keyfile);
     let keys = rustls_pemfile::pkcs8_private_keys(&mut reader)?;
     Ok(PrivateKey(keys[0].clone()))
 }
