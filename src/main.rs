@@ -1,14 +1,14 @@
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, AsyncBufReadExt};
 use tokio::net::{TcpListener, TcpStream};
-use rustls::{Certificate, PrivateKey, ServerConfig};  // 更新这行
-//use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig};
+use rustls::{Certificate, PrivateKey, ServerConfig};
 use tokio_rustls::TlsAcceptor;
 use std::fs::File;
 use std::io::BufReader as StdBufReader;
 use std::collections::HashMap;
 use base64::{Engine as _, engine::general_purpose};
 use reqwest;
+use rustls_pemfile::{pkcs8_private_keys, ec_private_keys};
 
 const PROXY_AUTH_HEADER: &str = "Proxy-Authorization";
 const EXPECTED_USERNAME: &str = "user";
@@ -17,8 +17,9 @@ const FAKE_SITE: &str = "https://www.google.com";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cert = load_certs("/app/ssl.crt")?;
-    let key = load_private_key("/app/ssl.key")?;
+    let cert = load_certs("/app/ssl.crt").map_err(|e| format!("Failed to load certificate: {}", e))?;
+    let key = load_private_key("/app/ssl.key").map_err(|e| format!("Failed to load private key: {}", e))?;
+
 
     let config = ServerConfig::builder()
         .with_safe_defaults()
@@ -207,6 +208,24 @@ fn load_certs(filename: &str) -> std::io::Result<Vec<Certificate>> {
 fn load_private_key(filename: &str) -> std::io::Result<PrivateKey> {
     let keyfile = File::open(filename)?;
     let mut reader = StdBufReader::new(keyfile);
-    let keys = rustls_pemfile::pkcs8_private_keys(&mut reader)?;
-    Ok(PrivateKey(keys[0].clone()))
+    
+    // 首先尝试读取为 PEM 编码的 EC 密钥
+    if let Ok(mut keys) = ec_private_keys(&mut reader) {
+        if !keys.is_empty() {
+            return Ok(PrivateKey(keys.remove(0)));
+        }
+    }
+    
+    // 如果失败，尝试读取为 PKCS#8 编码的密钥
+    reader.seek(std::io::SeekFrom::Start(0))?;
+    if let Ok(mut keys) = pkcs8_private_keys(&mut reader) {
+        if !keys.is_empty() {
+            return Ok(PrivateKey(keys.remove(0)));
+        }
+    }
+    
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "No supported private key found in the file",
+    ))
 }
