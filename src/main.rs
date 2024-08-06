@@ -4,11 +4,12 @@ use tokio::net::{TcpListener, TcpStream};
 use rustls::{Certificate, PrivateKey, ServerConfig};
 use tokio_rustls::TlsAcceptor;
 use std::fs::File;
-use std::io::{BufReader as StdBufReader};
+use std::io::{BufReader as StdBufReader, Seek, SeekFrom};  // 添加 Seek 和 SeekFrom
 use std::collections::HashMap;
 use reqwest;
-use rustls_pemfile::{certs, pkcs8_private_keys};
+use rustls_pemfile::{certs, pkcs8_private_keys, ec_private_keys};  // 添加 ec_private_keys
 use url::Url;
+use base64::{Engine as _, engine::general_purpose};  // 如果您使用 base64 解码
 
 const EXPECTED_USERNAME: &str = "user";
 const EXPECTED_PASSWORD: &str = "password";
@@ -195,15 +196,15 @@ fn load_private_key(filename: &str) -> std::io::Result<PrivateKey> {
     let keyfile = File::open(filename)?;
     let mut reader = StdBufReader::new(keyfile);
     
-    // 首先尝试原来的方法
+    // 尝试读取 PKCS#8 私钥
     if let Ok(mut keys) = pkcs8_private_keys(&mut reader) {
         if !keys.is_empty() {
             return Ok(PrivateKey(keys.remove(0)));
         }
     }
     
-    // 如果失败,尝试读取为 PEM 编码的 EC 密钥
-    reader.seek(std::io::SeekFrom::Start(0))?;
+    // 如果失败，尝试读取 PEM 编码的 EC 密钥
+    reader.seek(SeekFrom::Start(0))?;
     if let Ok(mut keys) = ec_private_keys(&mut reader) {
         if !keys.is_empty() {
             return Ok(PrivateKey(keys.remove(0)));
