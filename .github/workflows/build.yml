@@ -1,55 +1,24 @@
-name: Build and Release
+name: Release
 
 on:
   workflow_dispatch:
     inputs:
-      release_version:
-        description: 'Release version'
+      version:
+        description: 'Version tag'
         required: true
-        default: '1.0.0'
-      is_prerelease:
-        description: 'Is this a pre-release?'
-        type: boolean
-        required: true
-        default: false
-
-permissions:
-  contents: write
 
 jobs:
-  build-and-release:
+  release:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-
-    - name: Setup Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: minimal
-        toolchain: stable
-        override: true
-
-    - name: Build project
-      run: cargo build --release --verbose
-
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
+    - uses: actions/checkout@v3
+    - name: Build
+      run: cargo build --release
+    - name: Release
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: v${{ github.event.inputs.release_version }}
-        release_name: Release ${{ github.event.inputs.release_version }}
-        draft: false
-        prerelease: ${{ github.event.inputs.is_prerelease }}
-
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./target/release/build
-        asset_name: build-${{ github.event.inputs.release_version }}
-        asset_content_type: application/octet-stream
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release create ${{ github.event.inputs.version }} \
+          --title "${{ github.event.inputs.version }}" \
+          --notes "Release ${{ github.event.inputs.version }}" \
+          ./target/release/YOUR_BINARY_NAME
