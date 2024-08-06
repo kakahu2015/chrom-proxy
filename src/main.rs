@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, AsyncBufReadExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig};
+use rustls::{Certificate, PrivateKey, ServerConfig};  // 更新这行
+//use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig};
 use tokio_rustls::TlsAcceptor;
 use std::fs::File;
 use std::io::BufReader as StdBufReader;
