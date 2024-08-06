@@ -4,9 +4,9 @@ use tokio::net::{TcpListener, TcpStream};
 use rustls::{Certificate, PrivateKey, ServerConfig};
 use tokio_rustls::TlsAcceptor;
 use std::fs::File;
-use std::io::BufReader as StdBufReader;
+use std::io::{BufReader as StdBufReader, Seek};  // 添加 Seek
 use std::collections::HashMap;
-use base64::{Engine as _, engine::general_purpose};
+use base64::{Engine as _, engine::general_purpose};  // 修正 typo
 use reqwest;
 use rustls_pemfile::{pkcs8_private_keys, ec_private_keys};
 
