@@ -8,6 +8,9 @@ on:
         required: true
         default: '0.1.0'
 
+env:
+  CARGO_TERM_COLOR: always
+
 permissions:
   contents: write
 
@@ -17,18 +20,41 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y musl-tools
+
+    - name: Cache Rust dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
     - name: Set up Rust
       uses: actions-rs/toolchain@v1
       with:
         profile: minimal
         toolchain: stable
+        target: x86_64-unknown-linux-musl
         override: true
 
     - name: Build
-      run: cargo build --release
+      uses: actions-rs/cargo@v1
+      with:
+        use-cross: true
+        command: build
+        args: --release --target x86_64-unknown-linux-musl
 
     - name: Run tests
-      run: cargo test --release
+      uses: actions-rs/cargo@v1
+      with:
+        use-cross: true
+        command: test
+        args: --release --target x86_64-unknown-linux-musl
 
     - name: Get binary name
       id: get_binary
@@ -39,11 +65,15 @@ jobs:
 
     - name: Verify binary
       run: |
-        if [ ! -f target/release/${{ steps.get_binary.outputs.BINARY_NAME }} ]; then
+        if [ ! -f target/x86_64-unknown-linux-musl/release/${{ steps.get_binary.outputs.BINARY_NAME }} ]; then
           echo "Error: Binary not found. Build may have failed."
           exit 1
         fi
-        echo "Binary successfully built: $(ls -l target/release/${{ steps.get_binary.outputs.BINARY_NAME }})"
+        echo "Binary successfully built: $(ls -l target/x86_64-unknown-linux-musl/release/${{ steps.get_binary.outputs.BINARY_NAME }})"
+        file target/x86_64-unknown-linux-musl/release/${{ steps.get_binary.outputs.BINARY_NAME }}
+
+    - name: Strip binary
+      run: strip target/x86_64-unknown-linux-musl/release/${{ steps.get_binary.outputs.BINARY_NAME }}
 
     - name: Create Release
       id: create_release
@@ -62,7 +92,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./target/release/${{ steps.get_binary.outputs.BINARY_NAME }}
+        asset_path: ./target/x86_64-unknown-linux-musl/release/${{ steps.get_binary.outputs.BINARY_NAME }}
         asset_name: ${{ steps.get_binary.outputs.BINARY_NAME }}-${{ github.event.inputs.version }}
         asset_content_type: application/octet-stream
 
@@ -70,4 +100,4 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: ${{ steps.get_binary.outputs.BINARY_NAME }}
-        path: target/release/${{ steps.get_binary.outputs.BINARY_NAME }}
+        path: target/x86_64-unknown-linux-musl/release/${{ steps.get_binary.outputs.BINARY_NAME }}
