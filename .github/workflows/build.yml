@@ -90,7 +90,10 @@ jobs:
         echo "SHA256 checksum:"
         cat SHA256SUMS.txt
         echo "Uploading SHA256SUMS.txt to release..."
-        gh release upload v${{ github.event.inputs.release_version }} SHA256SUMS.txt --clobber
+        gh release upload \
+          v${{ github.event.inputs.release_version }} \
+          SHA256SUMS.txt \
+          --clobber
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
