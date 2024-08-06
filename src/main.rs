@@ -1,82 +1,211 @@
-name: Manual Build and Release
+use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, AsyncBufReadExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig};
+use tokio_rustls::TlsAcceptor;
+use std::fs::File;
+use std::io::BufReader as StdBufReader;
+use std::collections::HashMap;
+use base64::{Engine as _, engine::general_purpose};
+use reqwest;
 
-on:
-  workflow_dispatch:
-    inputs:
-      release_version:
-        description: 'Release version'
-        required: true
-        default: '1.0.0'
-      is_prerelease:
-        description: 'Is this a pre-release?'
-        type: boolean
-        required: true
-        default: false
+const PROXY_AUTH_HEADER: &str = "Proxy-Authorization";
+const EXPECTED_USERNAME: &str = "user";
+const EXPECTED_PASSWORD: &str = "password";
+const FAKE_SITE: &str = "https://www.google.com";
 
-permissions:
-  contents: write
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cert = load_certs("path/to/cert.pem")?;
+    let key = load_private_key("path/to/key.pem")?;
 
-jobs:
-  compile-and-publish:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+    let config = ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth()
+        .with_single_cert(cert, key)?;
+    let acceptor = TlsAcceptor::from(Arc::new(config));
 
-    - name: Setup Rust environment
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: minimal
-        toolchain: stable
-        override: true
+    let listener = TcpListener::bind("127.0.0.1:8443").await?;
+    println!("HTTPS proxy server listening on 127.0.0.1:8443");
 
-    - name: Cache dependencies
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let acceptor = acceptor.clone();
 
-    - name: Build project
-      run: cargo build --release --verbose
+        tokio::spawn(async move {
+            if let Ok(stream) = acceptor.accept(stream).await {
+                if let Err(e) = handle_client(stream).await {
+                    eprintln!("Error handling client: {}", e);
+                }
+            }
+        });
+    }
+}
 
-    - name: Run tests
-      run: cargo test --release --verbose
+async fn handle_client(mut stream: tokio_rustls::server::TlsStream<TcpStream>) -> Result<(), Box<dyn std::error::Error>> {
+    let (reader, mut writer) = tokio::io::split(stream);
+    let mut buf_reader = BufReader::new(reader);
+    
+    let mut request_line = String::new();
+    buf_reader.read_line(&mut request_line).await?;
 
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: v${{ github.event.inputs.release_version }}
-        release_name: Release ${{ github.event.inputs.release_version }}
-        draft: false
-        prerelease: ${{ github.event.inputs.is_prerelease }}
+    let (method, target, version) = parse_request_line(&request_line)?;
 
-    - name: Get artifact name
-      id: get_artifact_name
-      run: |
-        ARTIFACT_NAME=$(ls target/release | grep -v '\.d$')
-        echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
-        echo "Artifact name is: $ARTIFACT_NAME"
+    let mut headers = HashMap::new();
+    loop {
+        let mut line = String::new();
+        let bytes_read = buf_reader.read_line(&mut line).await?;
+        if bytes_read == 0 || line == "\r\n" {
+            break;
+        }
+        if let Some((key, value)) = parse_header(&line) {
+            headers.insert(key, value);
+        }
+    }
 
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./target/release/${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }}
-        asset_name: ${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }}-${{ github.event.inputs.release_version }}
-        asset_content_type: application/octet-stream
+    if !authenticate(&headers) {
+        return send_fake_response(&mut writer).await;
+    }
 
-    - name: Generate and upload SHA256 checksum
-      run: |
-        cd target/release
-        sha256sum ${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }} > SHA256SUMS.txt
-        gh release upload v${{ github.event.inputs.release_version }} SHA256SUMS.txt
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    if method == "CONNECT" {
+        handle_connect(target, &mut buf_reader, &mut writer).await?;
+    } else {
+        handle_regular_request(method, target, version, headers, &mut buf_reader, &mut writer).await?;
+    }
+
+    Ok(())
+}
+
+async fn send_fake_response(writer: &mut tokio::io::WriteHalf<tokio_rustls::server::TlsStream<TcpStream>>) -> Result<(), Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+    let fake_response = client.get(FAKE_SITE).send().await?;
+    let status = fake_response.status();
+    let headers = fake_response.headers().clone();
+    let body = fake_response.bytes().await?;
+
+    let mut response = format!(
+        "HTTP/1.1 {}\r\n",
+        status
+    );
+
+    for (name, value) in headers.iter() {
+        if name != "transfer-encoding" {
+            response.push_str(&format!("{}: {}\r\n", name, value.to_str().unwrap_or("")));
+        }
+    }
+
+    response.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
+    
+    writer.write_all(response.as_bytes()).await?;
+    writer.write_all(&body).await?;
+    writer.flush().await?;
+
+    Ok(())
+}
+
+async fn handle_connect(
+    target: &str,
+    reader: &mut BufReader<tokio::io::ReadHalf<tokio_rustls::server::TlsStream<TcpStream>>>,
+    writer: &mut tokio::io::WriteHalf<tokio_rustls::server::TlsStream<TcpStream>>
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut target_stream = TcpStream::connect(target).await?;
+    writer.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;
+    writer.flush().await?;
+
+    let (mut target_reader, mut target_writer) = target_stream.split();
+
+    let client_to_target = tokio::io::copy(reader, &mut target_writer);
+    let target_to_client = tokio::io::copy(&mut target_reader, writer);
+
+    tokio::select! {
+        _ = client_to_target => {},
+        _ = target_to_client => {},
+    }
+
+    Ok(())
+}
+
+async fn handle_regular_request(
+    method: &str, 
+    target: &str, 
+    version: &str, 
+    headers: HashMap<String, String>, 
+    reader: &mut BufReader<tokio::io::ReadHalf<tokio_rustls::server::TlsStream<TcpStream>>>,
+    writer: &mut tokio::io::WriteHalf<tokio_rustls::server::TlsStream<TcpStream>>
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut target_stream = TcpStream::connect(target).await?;
+    
+    let mut request = format!("{} {} {}\r\n", method, target, version);
+    for (key, value) in &headers {
+        request.push_str(&format!("{}: {}\r\n", key, value));
+    }
+    request.push_str("\r\n");
+
+    target_stream.write_all(request.as_bytes()).await?;
+
+    if let Some(content_length) = headers.get("Content-Length") {
+        let content_length: usize = content_length.parse()?;
+        let mut remaining = content_length;
+        let mut buffer = [0; 8192];
+        while remaining > 0 {
+            let to_read = remaining.min(buffer.len());
+            let bytes_read = reader.read(&mut buffer[..to_read]).await?;
+            if bytes_read == 0 {
+                break;
+            }
+            target_stream.write_all(&buffer[..bytes_read]).await?;
+            remaining -= bytes_read;
+        }
+    }
+
+    tokio::io::copy(&mut target_stream, writer).await?;
+
+    Ok(())
+}
+
+fn parse_request_line(line: &str) -> Result<(&str, &str, &str), Box<dyn std::error::Error>> {
+    let mut parts = line.split_whitespace();
+    let method = parts.next().ok_or("Missing method")?;
+    let target = parts.next().ok_or("Missing target")?;
+    let version = parts.next().ok_or("Missing HTTP version")?;
+    Ok((method, target, version))
+}
+
+fn parse_header(line: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = line.splitn(2, ':').collect();
+    if parts.len() == 2 {
+        Some((parts[0].trim().to_string(), parts[1].trim().to_string()))
+    } else {
+        None
+    }
+}
+
+fn authenticate(headers: &HashMap<String, String>) -> bool {
+    if let Some(auth) = headers.get(PROXY_AUTH_HEADER) {
+        if auth.starts_with("Basic ") {
+            if let Ok(decoded) = general_purpose::STANDARD.decode(&auth[6..]) {
+                if let Ok(auth_str) = String::from_utf8(decoded) {
+                    let parts: Vec<&str> = auth_str.splitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        return parts[0] == EXPECTED_USERNAME && parts[1] == EXPECTED_PASSWORD;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn load_certs(filename: &str) -> std::io::Result<Vec<Certificate>> {
+    let certfile = File::open(filename)?;
+    let mut reader = StdBufReader::new(certfile);
+    let certs = rustls_pemfile::certs(&mut reader)?;
+    Ok(certs.into_iter().map(Certificate).collect())
+}
+
+fn load_private_key(filename: &str) -> std::io::Result<PrivateKey> {
+    let keyfile = File::open(filename)?;
+    let mut reader = StdBufReader::new(keyfile);
+    let keys = rustls_pemfile::pkcs8_private_keys(&mut reader)?;
+    Ok(PrivateKey(keys[0].clone()))
+}
