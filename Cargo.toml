@@ -4,9 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1.28", features = ["full"] }
 tokio-rustls = "0.24"
 rustls-pemfile = "1.0"
 base64 = "0.21"
-reqwest = { version = "0.11", features = ["json"] }
-rustls = "0.21"  # 添加 rustls 依赖
+rustls = "0.21"
+openssl = { version = "0.10", features = ["vendored"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = 'abort'
+opt-level = 'z'
+strip = true
