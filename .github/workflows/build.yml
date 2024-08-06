@@ -45,6 +45,20 @@ jobs:
     - name: Run tests
       run: cargo test --release --verbose
 
+    - name: Get artifact name
+      id: get_artifact_name
+      run: |
+        ARTIFACT_NAME=$(ls target/release | grep -v '\.d$' | grep -v '\.rlib$' | head -n 1)
+        echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+        echo "Found artifact: $ARTIFACT_NAME"
+
+    - name: Verify artifact exists
+      run: |
+        if [ ! -f "target/release/${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }}" ]; then
+          echo "Error: Artifact file not found"
+          exit 1
+        fi
+
     - name: Create Release
       id: create_release
       uses: actions/create-release@v1
@@ -55,10 +69,6 @@ jobs:
         release_name: Release ${{ github.event.inputs.release_version }}
         draft: false
         prerelease: ${{ github.event.inputs.is_prerelease }}
-
-    - name: Get artifact name
-      id: get_artifact_name
-      run: echo "ARTIFACT_NAME=$(ls target/release | grep -v '\.d$' | head -n 1)" >> $GITHUB_OUTPUT
 
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
@@ -73,7 +83,20 @@ jobs:
     - name: Generate and upload SHA256 checksum
       run: |
         cd target/release
+        if [ ! -f "${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }}" ]; then
+          echo "Error: Artifact file not found for checksum generation"
+          exit 1
+        fi
         sha256sum ${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }} > SHA256SUMS.txt
         gh release upload v${{ github.event.inputs.release_version }} SHA256SUMS.txt
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Verify upload success
+      run: |
+        if ! gh release view v${{ github.event.inputs.release_version }} | grep -q "${{ steps.get_artifact_name.outputs.ARTIFACT_NAME }}"; then
+          echo "Error: Asset upload verification failed"
+          exit 1
+        fi
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
