@@ -30,15 +30,6 @@ jobs:
         toolchain: stable
         override: true
 
-    - name: Cache dependencies
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
     - name: Build project
       run: cargo build --release --verbose
 
@@ -58,7 +49,7 @@ jobs:
 
     - name: Get artifact name
       id: get_artifact_name
-      run: echo "ARTIFACT_NAME=$(ls target/release | grep -v '\.d$')" >> "$GITHUB_OUTPUT"
+      run: echo "ARTIFACT_NAME=$(ls target/release | grep -v '\.d$' | head -n 1)" >> $GITHUB_OUTPUT
 
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
