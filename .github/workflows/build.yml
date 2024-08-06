@@ -58,7 +58,7 @@ jobs:
 
     - name: Get artifact name
       id: get_artifact_name
-      run: echo "ARTIFACT_NAME=$(ls target/release | grep -v '\.d$')" >> $GITHUB_OUTPUT
+      run: echo "ARTIFACT_NAME=$(ls target/release | grep -v '\.d$')" >> "$GITHUB_OUTPUT"
 
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
