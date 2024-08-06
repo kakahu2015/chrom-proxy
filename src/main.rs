@@ -17,8 +17,8 @@ const FAKE_SITE: &str = "https://www.google.com";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cert = load_certs("path/to/cert.pem")?;
-    let key = load_private_key("path/to/key.pem")?;
+    let cert = load_certs("/app/ssl.crt")?;
+    let key = load_private_key("/app/ssl.key")?;
 
     let config = ServerConfig::builder()
         .with_safe_defaults()
@@ -26,8 +26,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_single_cert(cert, key)?;
     let acceptor = TlsAcceptor::from(Arc::new(config));
 
-    let listener = TcpListener::bind("127.0.0.1:8443").await?;
-    println!("HTTPS proxy server listening on 127.0.0.1:8443");
+    let listener = TcpListener::bind("0.0.0.0:443").await?;
+    println!("HTTPS proxy server listening on 0.0.0.0:443");
 
     loop {
         let (stream, _) = listener.accept().await?;
