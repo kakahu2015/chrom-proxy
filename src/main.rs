@@ -1,10 +1,11 @@
 use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
 use serde::{Deserialize, Serialize};
-use actix_web::{web, App, HttpServer, HttpResponse, Result};
+use actix_web::{web, App, HttpServer, HttpResponse, Result, error::internal_server_error};
 use std::process::Command;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
+use actix_web::http::header::{Authorization, Bearer};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -67,15 +68,17 @@ fn verify_token(token: &str, store: &TokenStore) -> Result<String, jsonwebtoken:
 
 async fn execute_command(
     req: web::Json<CommandRequest>, 
-    auth: web::Header<String>,
+    auth: web::Header<Authorization<Bearer>>,
     store: web::Data<Arc<TokenStore>>
 ) -> Result<HttpResponse> {
-    match verify_token(auth.as_str(), &store) {
+    let token = auth.into_scheme().token().to_string();
+
+    match verify_token(&token, &store) {
         Ok(_) => {
             let output = Command::new(&req.command)
                 .args(&req.args)
                 .output()
-                .map_err(|e| HttpResponse::InternalServerError().json(format!("Failed to execute command: {}", e)))?;
+                .map_err(|e| internal_server_error(format!("Failed to execute command: {}", e)))?;
 
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -90,7 +93,6 @@ async fn execute_command(
     }
 }
 
-// 新增：用于撤销token的端点
 async fn revoke_token(
     req: web::Json<RevokeTokenRequest>,
     store: web::Data<Arc<TokenStore>>
