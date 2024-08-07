@@ -1,12 +1,11 @@
 use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
 use serde::{Deserialize, Serialize};
-use actix_web::{web, App, HttpServer, HttpResponse, Result, ResponseError};
+use actix_web::{web, App, HttpServer, HttpResponse, Result, Error};
 use std::process::Command;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 use actix_web::http::header::{AUTHORIZATION, HeaderValue, WWW_AUTHENTICATE};
-use actix_web::http::StatusCode;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -71,7 +70,7 @@ async fn execute_command(
     req: web::Json<CommandRequest>,
     auth: web::Header<AUTHORIZATION>,
     store: web::Data<Arc<TokenStore>>
-) -> Result<HttpResponse> {
+) -> Result<HttpResponse, Error> {
     let auth_header = auth.to_str().map_err(|_| {
         actix_web::error::ErrorUnauthorized(
             "Invalid Authorization header format"
