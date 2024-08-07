@@ -1,6 +1,6 @@
 use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
 use serde::{Deserialize, Serialize};
-use actix_web::{web, App, HttpServer, HttpResponse, Result, Error};
+use actix_web::{web, App, HttpServer, HttpResponse, Result, Error, http::header::HeaderMap};
 use std::process::Command;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -68,14 +68,13 @@ fn verify_token(token: &str, store: &TokenStore) -> Result<String, jsonwebtoken:
 
 async fn execute_command(
     req: web::Json<CommandRequest>,
-    auth: web::Header<AUTHORIZATION>,
+    headers: web::HeaderMap,
     store: web::Data<Arc<TokenStore>>
 ) -> Result<HttpResponse, Error> {
-    let auth_header = auth.to_str().map_err(|_| {
-        actix_web::error::ErrorUnauthorized(
-            "Invalid Authorization header format"
-        )
-    })?;
+    let auth_header = headers.get(AUTHORIZATION)
+        .ok_or_else(|| actix_web::error::ErrorUnauthorized("Authorization header missing"))?
+        .to_str()
+        .map_err(|_| actix_web::error::ErrorUnauthorized("Invalid Authorization header format"))?;
 
     let token = auth_header.trim_start_matches("Bearer ");
 
@@ -84,18 +83,18 @@ async fn execute_command(
             let output = Command::new(&req.command)
                 .args(&req.args)
                 .output()
-                .map_err(|e| internal_server_error(format!("Failed to execute command: {}", e)))?;
+                .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to execute command: {}", e)))?;
 
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-            Ok(HttpResponse::Ok().json(CommandResponse { 
+            Ok(HttpResponse::Ok().json(CommandResponse {
                 stdout,
                 stderr,
                 status: output.status.code()
             }))
         },
-         Err(_) => {
+        Err(_) => {
             let mut response = HttpResponse::Unauthorized();
             response.insert_header((WWW_AUTHENTICATE, HeaderValue::from_static("Bearer")));
             Ok(response.json("Invalid token"))
