@@ -70,7 +70,7 @@ async fn execute_command(
     data: web::Data<AppState>
 ) -> Result<HttpResponse, Error> {
     // 添加：打印接收到的命令，用于调试
-    println!("Received command: {:?}", json);
+    //println!("Received command: {:?}", json);
 
     let headers = req.headers();
     let auth_header = headers.get(AUTHORIZATION)
@@ -124,7 +124,7 @@ async fn main() -> std::io::Result<()> {
     // 将 token 写入文件
     let mut file = File::create("token.txt").expect("Failed to create token file");
     writeln!(file, "{}", token).expect("Failed to write token to file");
-    println!("Token has been written to token.txt");
+    //println!("Token has been written to token.txt");
 
     let app_state = web::Data::new(AppState { token: token.clone() });
 
