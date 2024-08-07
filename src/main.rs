@@ -69,9 +69,6 @@ async fn execute_command(
     json: web::Json<CommandRequest>,
     data: web::Data<AppState>
 ) -> Result<HttpResponse, Error> {
-    // 添加：打印接收到的命令，用于调试
-    //println!("Received command: {:?}", json);
-
     let headers = req.headers();
     let auth_header = headers.get(AUTHORIZATION)
         .ok_or_else(|| actix_web::error::ErrorUnauthorized("Authorization header missing"))?
@@ -88,13 +85,10 @@ async fn execute_command(
 
     match verify_token(&token) {
         Ok(_) => {
-            // 修改：更新命令解析逻辑
-            let parts: Vec<&str> = json.command.split_whitespace().collect();
-            let command = parts.get(0).unwrap_or(&"");
-            let args: Vec<&str> = parts.get(1..).unwrap_or(&[]).to_vec();
-
-            let output = Command::new(command)
-                .args(args)
+            // 使用 /bin/sh 来执行完整的命令字符串
+            let output = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&json.command)
                 .output()
                 .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to execute command: {}", e)))?;
 
