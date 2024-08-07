@@ -111,7 +111,7 @@ async fn main() -> std::io::Result<()> {
                     .route(web::post().to(execute_command))
             )
     })
-    .bind("127.0.0.1:8081")?
+    .bind("127.0.0.1:8088")?
     .run()
     .await
 }
