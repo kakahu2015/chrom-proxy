@@ -1,11 +1,12 @@
 use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
 use serde::{Deserialize, Serialize};
-use actix_web::{web, App, HttpServer, HttpResponse, Result, error::internal_server_error};
+use actix_web::{web, App, HttpServer, HttpResponse, Result, ResponseError};
 use std::process::Command;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
-use actix_web::http::header::{Authorization, Bearer};
+use actix_web::http::header::{AUTHORIZATION, HeaderValue, WWW_AUTHENTICATE};
+use actix_web::http::StatusCode;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -67,11 +68,17 @@ fn verify_token(token: &str, store: &TokenStore) -> Result<String, jsonwebtoken:
 }
 
 async fn execute_command(
-    req: web::Json<CommandRequest>, 
-    auth: web::Header<Authorization<Bearer>>,
+    req: web::Json<CommandRequest>,
+    auth: web::Header<AUTHORIZATION>,
     store: web::Data<Arc<TokenStore>>
 ) -> Result<HttpResponse> {
-    let token = auth.into_scheme().token().to_string();
+    let auth_header = auth.to_str().map_err(|_| {
+        actix_web::error::ErrorUnauthorized(
+            "Invalid Authorization header format"
+        )
+    })?;
+
+    let token = auth_header.trim_start_matches("Bearer ");
 
     match verify_token(&token, &store) {
         Ok(_) => {
@@ -89,7 +96,11 @@ async fn execute_command(
                 status: output.status.code()
             }))
         },
-        Err(_) => Ok(HttpResponse::Unauthorized().json("Invalid token")),
+         Err(_) => {
+            let mut response = HttpResponse::Unauthorized();
+            response.insert_header((WWW_AUTHENTICATE, HeaderValue::from_static("Bearer")));
+            Ok(response.json("Invalid token"))
+        }
     }
 }
 
