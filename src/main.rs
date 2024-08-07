@@ -61,8 +61,12 @@ async fn execute_command(
 
     match verify_token(&token) {
         Ok(_) => {
-            let output = Command::new(&json.command)
-                .args(&json.args)
+            let mut parts = json.command.split_whitespace();
+            let command = parts.next().unwrap_or("");
+            let args: Vec<&str> = parts.collect();
+
+            let output = Command::new(command)
+                .args(args)
                 .output()
                 .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to execute command: {}", e)))?;
 
@@ -82,6 +86,7 @@ async fn execute_command(
         }
     }
 }
+
 
 #[derive(Deserialize)]
 struct CommandRequest {
