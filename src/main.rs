@@ -5,6 +5,9 @@ use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey}
 use uuid::Uuid;
 use chrono::{Utc, Duration};
 use actix_web::http::header::{AUTHORIZATION, HeaderValue, WWW_AUTHENTICATE};
+use std::fs::File;
+use std::io::Write;
+use clap::Parser;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -15,6 +18,13 @@ struct Claims {
 
 struct AppState {
     token: String,
+}
+
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    #[clap(short, long, default_value = "8088")]
+    port: u16,
 }
 
 fn generate_token() -> Result<String, jsonwebtoken::errors::Error> {
@@ -107,10 +117,18 @@ async fn execute_command(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    let args = Args::parse();
+
     let token = generate_token().expect("Failed to generate token");
-    println!("Generated token: {}", token);
+    
+    // 将 token 写入文件
+    let mut file = File::create("token.txt").expect("Failed to create token file");
+    writeln!(file, "{}", token).expect("Failed to write token to file");
+    println!("Token has been written to token.txt");
 
     let app_state = web::Data::new(AppState { token: token.clone() });
+
+    println!("Starting server on port {}", args.port);
 
     HttpServer::new(move || {
         App::new()
@@ -120,7 +138,7 @@ async fn main() -> std::io::Result<()> {
                     .route(web::post().to(execute_command))
             )
     })
-    .bind("127.0.0.1:8088")?
+    .bind(("127.0.0.1", args.port))?
     .run()
     .await
 }
