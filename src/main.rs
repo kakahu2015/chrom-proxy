@@ -1,11 +1,11 @@
 use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
 use serde::{Deserialize, Serialize};
-use actix_web::{web, App, HttpServer, HttpResponse, Result, Error, http::header::HeaderMap};
+use actix_web::{web, App, HttpServer, HttpResponse, Result, Error, HttpRequest};
 use std::process::Command;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
-use actix_web::http::header::{AUTHORIZATION, HeaderValue, WWW_AUTHENTICATE};
+use actix_web::http::header::{AUTHORIZATION, HeaderValue, WWW_AUTHENTICATE, HeaderMap};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -67,10 +67,11 @@ fn verify_token(token: &str, store: &TokenStore) -> Result<String, jsonwebtoken:
 }
 
 async fn execute_command(
-    req: web::Json<CommandRequest>,
-    headers: web::HeaderMap,
+    req: HttpRequest,
+    json: web::Json<CommandRequest>,
     store: web::Data<Arc<TokenStore>>
 ) -> Result<HttpResponse, Error> {
+    let headers = req.headers();
     let auth_header = headers.get(AUTHORIZATION)
         .ok_or_else(|| actix_web::error::ErrorUnauthorized("Authorization header missing"))?
         .to_str()
@@ -80,8 +81,8 @@ async fn execute_command(
 
     match verify_token(&token, &store) {
         Ok(_) => {
-            let output = Command::new(&req.command)
-                .args(&req.args)
+            let output = Command::new(&json.command)
+                .args(&json.args)
                 .output()
                 .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to execute command: {}", e)))?;
 
@@ -101,6 +102,7 @@ async fn execute_command(
         }
     }
 }
+
 
 async fn revoke_token(
     req: web::Json<RevokeTokenRequest>,
@@ -130,6 +132,7 @@ async fn main() -> std::io::Result<()> {
     .run()
     .await
 }
+
 
 #[derive(Deserialize)]
 struct CommandRequest {
