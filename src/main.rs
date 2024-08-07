@@ -8,9 +8,9 @@ use actix_web::http::header::{AUTHORIZATION, HeaderValue, WWW_AUTHENTICATE};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
-    sub: String,  // 用户标识符
-    jti: String,  // Token唯一标识符
-    exp: usize,   // 过期时间
+    sub: String,
+    jti: String,
+    exp: usize,
 }
 
 struct AppState {
@@ -26,18 +26,32 @@ fn generate_token() -> Result<String, jsonwebtoken::errors::Error> {
     };
 
     let header = Header::default();
-    let key = EncodingKey::from_secret(b"your_secret_key");  // 实际应用中使用环境变量
+    let key = EncodingKey::from_secret(b"your_secret_key");
 
     encode(&header, &claims, &key)
 }
 
 fn verify_token(token: &str) -> Result<(), jsonwebtoken::errors::Error> {
     let token = token.trim_start_matches("Bearer ");
-    let secret = b"your_secret_key"; // 实际应用中使用环境变量
+    let secret = b"your_secret_key";
     let validation = Validation::default();
 
     decode::<Claims>(token, &DecodingKey::from_secret(secret), &validation)?;
     Ok(())
+}
+
+// 修改：更新 CommandRequest 结构体
+#[derive(Deserialize, Debug)] // 添加 Debug trait
+struct CommandRequest {
+    command: String,
+    // 删除 args 字段
+}
+
+#[derive(Serialize)]
+struct CommandResponse {
+    stdout: String,
+    stderr: String,
+    status: Option<i32>,
 }
 
 async fn execute_command(
@@ -45,6 +59,9 @@ async fn execute_command(
     json: web::Json<CommandRequest>,
     data: web::Data<AppState>
 ) -> Result<HttpResponse, Error> {
+    // 添加：打印接收到的命令，用于调试
+    println!("Received command: {:?}", json);
+
     let headers = req.headers();
     let auth_header = headers.get(AUTHORIZATION)
         .ok_or_else(|| actix_web::error::ErrorUnauthorized("Authorization header missing"))?
@@ -61,9 +78,10 @@ async fn execute_command(
 
     match verify_token(&token) {
         Ok(_) => {
-            let mut parts = json.command.split_whitespace();
-            let command = parts.next().unwrap_or("");
-            let args: Vec<&str> = parts.collect();
+            // 修改：更新命令解析逻辑
+            let parts: Vec<&str> = json.command.split_whitespace().collect();
+            let command = parts.get(0).unwrap_or(&"");
+            let args: Vec<&str> = parts.get(1..).unwrap_or(&[]).to_vec();
 
             let output = Command::new(command)
                 .args(args)
@@ -85,20 +103,6 @@ async fn execute_command(
             Ok(response.json("Invalid token"))
         }
     }
-}
-
-
-#[derive(Deserialize)]
-struct CommandRequest {
-    command: String,
-    args: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct CommandResponse {
-    stdout: String,
-    stderr: String,
-    status: Option<i32>,
 }
 
 #[actix_web::main]
